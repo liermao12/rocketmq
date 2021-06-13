@@ -46,20 +46,29 @@ public class NamesrvController {
 
     private final NettyServerConfig nettyServerConfig;
 
+    // 调度线程池，执行定时任务，两件事:1、检查存活的broker状态  2、打印配置
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
         "NSScheduledThread"));
+    
+    // 管理KV配置。
     private final KVConfigManager kvConfigManager;
+    // 管理路由信息的对象。 重要！
     private final RouteInfoManager routeInfoManager;
 
+    // 网络层封装对象, 重要！
     private RemotingServer remotingServer;
 
+    // ChannelEventListener ,用于监听 channel 状态，当channel 状态发生改变时，比如 close idle...会向 事件队列发起事件，事件最终由 该service处理。
     private BrokerHousekeepingService brokerHousekeepingService;
 
+    // 业务线程池，netty 线程 主要任务是 将 报文 解析 成 RemotingCommand 对象，然后就将 该对象 交给 业务线程池 再继续处理。
     private ExecutorService remotingExecutor;
 
     private Configuration configuration;
     private FileWatchService fileWatchService;
 
+    // 参数1：namesrvConfig
+    // 参数2：网络层配置 nettyServerConfig
     public NamesrvController(NamesrvConfig namesrvConfig, NettyServerConfig nettyServerConfig) {
         this.namesrvConfig = namesrvConfig;
         this.nettyServerConfig = nettyServerConfig;
@@ -74,16 +83,18 @@ public class NamesrvController {
     }
 
     public boolean initialize() {
-
+        // 加载本地kv配置
         this.kvConfigManager.load();
-
+        // 创建网络服务器对象
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
-
+        // 创建业务线程池，默认线程数是8
         this.remotingExecutor =
             Executors.newFixedThreadPool(nettyServerConfig.getServerWorkerThreads(), new ThreadFactoryImpl("RemotingExecutorThread_"));
 
+        // 注册协议处理器（缺省协议处理器）
         this.registerProcessor();
 
+        // 定时任务1：每10秒钟检查 broker 存活状态，将idle状态的 broker 移除。
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -92,6 +103,8 @@ public class NamesrvController {
             }
         }, 5, 10, TimeUnit.SECONDS);
 
+
+        // 定时任务2：每10分钟打印一遍 KV 配置
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -141,18 +154,21 @@ public class NamesrvController {
         return true;
     }
 
-    private void registerProcessor() {
+    private void  registerProcessor() {
         if (namesrvConfig.isClusterTest()) {
 
             this.remotingServer.registerDefaultProcessor(new ClusterTestRequestProcessor(this, namesrvConfig.getProductEnvName()),
                 this.remotingExecutor);
         } else {
-
+            // 注册缺省的协议处理器
+            // 参数一：缺省的协议处理器
+            // 参数二：处理器工作时使用的线程池，这里使用的是 业务线程池
             this.remotingServer.registerDefaultProcessor(new DefaultRequestProcessor(this), this.remotingExecutor);
         }
     }
 
     public void start() throws Exception {
+        // 服务器网络层启动。
         this.remotingServer.start();
 
         if (this.fileWatchService != null) {
