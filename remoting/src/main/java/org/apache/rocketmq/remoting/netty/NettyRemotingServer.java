@@ -65,14 +65,19 @@ import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
 public class NettyRemotingServer extends NettyRemotingAbstract implements RemotingServer {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(RemotingHelper.ROCKETMQ_REMOTING);
+    // netty服务端启动对象
     private final ServerBootstrap serverBootstrap;
+    // netty worker组线程池
     private final EventLoopGroup eventLoopGroupSelector;
+    // netty boss 组线程池 一般只有一个线程。
     private final EventLoopGroup eventLoopGroupBoss;
+    // netty 服务端网络配置
     private final NettyServerConfig nettyServerConfig;
-
+    // 公共线程池，注册处理器时，如果 未指定 线程池，则使用公共线程池
     private final ExecutorService publicExecutor;
+    // HouseKeepingService , BrokerHouseKeepingService(nameserver 使用) , ClientHouseKeepingService （broker 使用）
     private final ChannelEventListener channelEventListener;
-
+    // 定时器，执行 scanResponseTable 任务。
     private final Timer timer = new Timer("ServerHouseKeepingService", true);
     private DefaultEventExecutorGroup defaultEventExecutorGroup;
 
