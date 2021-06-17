@@ -79,15 +79,16 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
     private final ChannelEventListener channelEventListener;
     // 定时器，执行 scanResponseTable 任务。
     private final Timer timer = new Timer("ServerHouseKeepingService", true);
+    // 当向channel pipeline 添加 handler 时 指定了 group 时，网络事件传播 到当前handler时，事件处理由分配给 handler 的线程执行。
     private DefaultEventExecutorGroup defaultEventExecutorGroup;
-
-
+    // 服务器绑定的端口。
     private int port = 0;
 
     private static final String HANDSHAKE_HANDLER_NAME = "handshakeHandler";
     private static final String TLS_HANDLER_NAME = "sslHandler";
     private static final String FILE_REGION_ENCODER_NAME = "fileRegionEncoder";
 
+    // 共享的处理器，多个ch 都使用同一个对象。
     // sharable handlers
     private HandshakeHandler handshakeHandler;
     private NettyEncoder encoder;
@@ -100,16 +101,22 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
     public NettyRemotingServer(final NettyServerConfig nettyServerConfig,
         final ChannelEventListener channelEventListener) {
+        // 服务器向客户端主动发起请求时 并发限制。
+        // 1.单向请求的并发限制
+        // 2.异步请求的并发限制
         super(nettyServerConfig.getServerOnewaySemaphoreValue(), nettyServerConfig.getServerAsyncSemaphoreValue());
         this.serverBootstrap = new ServerBootstrap();
         this.nettyServerConfig = nettyServerConfig;
         this.channelEventListener = channelEventListener;
 
+        // 公共线程池的线程数量 默认给的 0 ，这里最终改为4
         int publicThreadNums = nettyServerConfig.getServerCallbackExecutorThreads();
+
         if (publicThreadNums <= 0) {
             publicThreadNums = 4;
         }
 
+        // 创建公共线程池，指定线程工厂，设置线程名称前缀：NettyServerPublicExecutor_[数字]
         this.publicExecutor = Executors.newFixedThreadPool(publicThreadNums, new ThreadFactory() {
             private AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -119,6 +126,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             }
         });
 
+        // 创建 netty 的两个线程组，一个是 boss组，一个是 worker组
         if (useEpoll()) {
             this.eventLoopGroupBoss = new EpollEventLoopGroup(1, new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
@@ -186,6 +194,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
     @Override
     public void start() {
+        // 当向channel pipeline 添加 handler 时 指定了 group 时，网络事件传播 到当前handler时，事件处理由分配给 handler 的线程执行。
         this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(
             nettyServerConfig.getServerWorkerThreads(),
             new ThreadFactory() {
@@ -198,21 +207,30 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 }
             });
 
+        // 创建共享的 处理器 handler
         prepareSharableHandlers();
 
         ServerBootstrap childHandler =
+                // 配置服务端 启动对象
+                // 配置工作组 boss 和 worker 组
             this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupSelector)
+                    // 设置服务端 ServerSocketChannel 类型
                 .channel(useEpoll() ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
+                    // 设置服务端 ch 选项
                 .option(ChannelOption.SO_BACKLOG, 1024)
                 .option(ChannelOption.SO_REUSEADDR, true)
                 .option(ChannelOption.SO_KEEPALIVE, false)
+                    // 设置客户端 ch 选项
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSndBufSize())
                 .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize())
+                    // 设置服务端 端口
                 .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
+                    //
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     public void initChannel(SocketChannel ch) throws Exception {
+                        // 初始化 客户端ch pipeli  的逻辑
                         ch.pipeline()
                             .addLast(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, handshakeHandler)
                             .addLast(defaultEventExecutorGroup,
@@ -226,21 +244,28 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 });
 
         if (nettyServerConfig.isServerPooledByteBufAllocatorEnable()) {
+            // 客户端开启 内存池，使用的内存池是 PooledByteBufAllocator.DEFAULT
             childHandler.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         }
 
         try {
+            // 服务器 绑定端口。
             ChannelFuture sync = this.serverBootstrap.bind().sync();
             InetSocketAddress addr = (InetSocketAddress) sync.channel().localAddress();
+            // 将服务器成功绑定的端口号 赋值给 字段 port
             this.port = addr.getPort();
         } catch (InterruptedException e1) {
             throw new RuntimeException("this.serverBootstrap.bind().sync() InterruptedException", e1);
         }
 
+        //houseKeepingService 不为空，则创建 网络异常事件 处理器
         if (this.channelEventListener != null) {
+
             this.nettyEventExecutor.start();
         }
 
+        // 提交定时任务，每一秒 执行一次
+        // 扫描 responseTable 表，将过期的 responseFuture 移除。
         this.timer.scheduleAtFixedRate(new TimerTask() {
 
             @Override
