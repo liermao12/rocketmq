@@ -89,10 +89,13 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
             case RequestCode.QUERY_DATA_VERSION:
                 return queryBrokerTopicConfig(ctx, request);
             case RequestCode.REGISTER_BROKER:
+
                 Version brokerVersion = MQVersion.value2Version(request.getVersion());
                 if (brokerVersion.ordinal() >= MQVersion.Version.V3_0_11.ordinal()) {
                     return this.registerBrokerWithFilterServer(ctx, request);
                 } else {
+                    // 参数1：包装 serverHandler 的 ctx
+                    // 参数2：request，客户端发送的 网络层请求对象 RemotingCommand
                     return this.registerBroker(ctx, request);
                 }
             case RequestCode.UNREGISTER_BROKER:
@@ -240,8 +243,11 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
 
     private boolean checksum(ChannelHandlerContext ctx, RemotingCommand request,
         RegisterBrokerRequestHeader requestHeader) {
+        // requestHeader.getBodyCrc32() 这个值是客户端那边计算出来的，保存到 header 中.
         if (requestHeader.getBodyCrc32() != 0) {
+            // 服务端 再次根据 body 计算 crc
             final int crc32 = UtilAll.crc32(request.getBody());
+            // 两次 crc 不一致 ，说明服务器 拿到的 request 和 客户端发送的 request 不一致。。
             if (crc32 != requestHeader.getBodyCrc32()) {
                 log.warn(String.format("receive registerBroker request,crc32 not match,from %s",
                     RemotingHelper.parseChannelRemoteAddr(ctx.channel())));
@@ -275,21 +281,34 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
         return response;
     }
 
+    // 参数1：包装 serverHandler 的 ctx
+    // 参数2：request，客户端发送的 网络层请求对象 RemotingCommand
     public RemotingCommand registerBroker(ChannelHandlerContext ctx,
         RemotingCommand request) throws RemotingCommandException {
+        // 创建响应请求的对象，大概清楚 response.customHeader 是一个 RegisterBrokerResponseHeader 实例对象
         final RemotingCommand response = RemotingCommand.createResponseCommand(RegisterBrokerResponseHeader.class);
+
+        // 获取出刚刚反射创建的 RegisterBrokerResponseHeader 用户自定义header对象。
         final RegisterBrokerResponseHeader responseHeader = (RegisterBrokerResponseHeader) response.readCustomHeader();
+
+        // 反射创建 RegisterBrokerRequestHeader 对象，并将 request.extFields 中的数据写入到 该对象中。
         final RegisterBrokerRequestHeader requestHeader =
             (RegisterBrokerRequestHeader) request.decodeCommandCustomHeader(RegisterBrokerRequestHeader.class);
 
+        // 条件成立：说明 crc 不通过..
         if (!checksum(ctx, request, requestHeader)) {
+            // code 设置成 系统错误
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("crc32 not match");
+            // 返回 response ，返回的response 由 callback 对象处理。
             return response;
         }
 
+        //执行到这里，说明 request 是正确的包。
+
         TopicConfigSerializeWrapper topicConfigWrapper;
         if (request.getBody() != null) {
+            // 解码 body,解码出来的数据就是当前机器的主题信息。
             topicConfigWrapper = TopicConfigSerializeWrapper.decode(request.getBody(), TopicConfigSerializeWrapper.class);
         } else {
             topicConfigWrapper = new TopicConfigSerializeWrapper();
@@ -297,6 +316,15 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
             topicConfigWrapper.getDataVersion().setTimestamp(0);
         }
 
+        // 注册方法
+        // 参数1：集群
+        // 参数2：节点IP地址
+        // 参数3：brokerName
+        // 参数4：brokerId，注意 0 的 brokerId 的节点为主节点
+        // 参数5：ha 节点ip地址
+        // 参数6：当前节点的主题信息
+        // 参数7：过滤服务器列表.
+        // 参数8：当前服务端与客户端 通信的 channel
         RegisterBrokerResult result = this.namesrvController.getRouteInfoManager().registerBroker(
             requestHeader.getClusterName(),
             requestHeader.getBrokerAddr(),
@@ -308,11 +336,15 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
             ctx.channel()
         );
 
+        // 将结果信息 写到 responseHeader 中
         responseHeader.setHaServerAddr(result.getHaServerAddr());
         responseHeader.setMasterAddr(result.getMasterAddr());
 
+        // 获取 kv 配置，写入 response body中。kv 配置是顺序消息相关的..
         byte[] jsonValue = this.namesrvController.getKvConfigManager().getKVListByNamespace(NamesrvUtil.NAMESPACE_ORDER_TOPIC_CONFIG);
         response.setBody(jsonValue);
+
+        // code 设置为 SUCCESS
         response.setCode(ResponseCode.SUCCESS);
         response.setRemark(null);
         return response;

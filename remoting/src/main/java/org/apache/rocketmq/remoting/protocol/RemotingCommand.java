@@ -113,13 +113,16 @@ public class RemotingCommand {
     public static RemotingCommand createResponseCommand(int code, String remark,
         Class<? extends CommandCustomHeader> classHeader) {
         RemotingCommand cmd = new RemotingCommand();
+        // 设置它是一个响应类型的请求
         cmd.markResponseType();
+        // 设置它的业务代码
         cmd.setCode(code);
         cmd.setRemark(remark);
         setCmdVersion(cmd);
 
         if (classHeader != null) {
             try {
+                // 反射创建 用户自定义 header 对象
                 CommandCustomHeader objectHeader = classHeader.newInstance();
                 cmd.customHeader = objectHeader;
             } catch (InstantiationException e) {

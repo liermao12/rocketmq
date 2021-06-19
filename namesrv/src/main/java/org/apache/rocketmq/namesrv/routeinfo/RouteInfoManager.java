@@ -99,6 +99,15 @@ public class RouteInfoManager {
         return topicList.encode();
     }
 
+    // 注册方法
+    // 参数1：集群
+    // 参数2：节点IP地址
+    // 参数3：brokerName
+    // 参数4：brokerId，注意 0 的 brokerId 的节点为主节点
+    // 参数5：ha 节点ip地址
+    // 参数6：当前节点的主题信息
+    // 参数7：过滤服务器列表.
+    // 参数8：当前服务端与客户端 通信的 channel
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
@@ -108,47 +117,64 @@ public class RouteInfoManager {
         final TopicConfigSerializeWrapper topicConfigWrapper,
         final List<String> filterServerList,
         final Channel channel) {
+        // 返回结果的封装对象
         RegisterBrokerResult result = new RegisterBrokerResult();
         try {
             try {
                 this.lock.writeLock().lockInterruptibly();
-
+                // 获取当前集群上的 broker 列表
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
                 if (null == brokerNames) {
                     brokerNames = new HashSet<String>();
+                    // 添加 新集群 映射数据
+                    // key 是集群名称
+                    // value 是集群集合set
                     this.clusterAddrTable.put(clusterName, brokerNames);
                 }
+                // 将当前broker加入集群set内
                 brokerNames.add(brokerName);
 
+                // 是否为第一次注册
                 boolean registerFirst = false;
 
+                // 获取brokerData
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null == brokerData) {
                     registerFirst = true;
+                    // 创建brokerData
                     brokerData = new BrokerData(clusterName, brokerName, new HashMap<Long, String>());
+                    // 将 broker 映射数据加入到 broker 映射表内。
                     this.brokerAddrTable.put(brokerName, brokerData);
                 }
+
+                // 获取 broker物理节点 map 表
                 Map<Long, String> brokerAddrsMap = brokerData.getBrokerAddrs();
                 //Switch slave to master: first remove <1, IP:PORT> in namesrv, then add <0, IP:PORT>
                 //The same IP:PORT must only have one record in brokerAddrTable
                 Iterator<Entry<Long, String>> it = brokerAddrsMap.entrySet().iterator();
                 while (it.hasNext()) {
                     Entry<Long, String> item = it.next();
+                    // 条件成立：物理节点 角色 发生变化了, 这个时候需要将它 从 broker 物理节点map 中移除
                     if (null != brokerAddr && brokerAddr.equals(item.getValue()) && brokerId != item.getKey()) {
                         it.remove();
                     }
                 }
 
+                // 重写
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
+
                 registerFirst = registerFirst || (null == oldAddr);
 
+                // 条件成立：broker上的主题不为空，并且当前物理节点是broker上的master节点
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
                     if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
                         || registerFirst) {
+                        // 获取当前broker信息的主题 映射表(从broker注册数据中获取的)
                         ConcurrentMap<String, TopicConfig> tcTable =
                             topicConfigWrapper.getTopicConfigTable();
                         if (tcTable != null) {
+                            // 加入 或者 更新到 nameserver 中
                             for (Map.Entry<String, TopicConfig> entry : tcTable.entrySet()) {
                                 this.createAndUpdateQueueData(brokerName, entry.getValue());
                             }
@@ -156,6 +182,8 @@ public class RouteInfoManager {
                     }
                 }
 
+                //添加 当前节点的 brokerLiveInfo ，定时任务会扫描这个映射表
+                //返回上一次心跳时当前 broker 节点的存活对象数据
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -175,22 +203,29 @@ public class RouteInfoManager {
                 }
 
                 if (MixAll.MASTER_ID != brokerId) {
+                    // 执行到这里，说明当前brokerId != 0
+
+                    // 获取broker 主节点物理地址
                     String masterAddr = brokerData.getBrokerAddrs().get(MixAll.MASTER_ID);
                     if (masterAddr != null) {
+
                         BrokerLiveInfo brokerLiveInfo = this.brokerLiveTable.get(masterAddr);
                         if (brokerLiveInfo != null) {
                             result.setHaServerAddr(brokerLiveInfo.getHaServerAddr());
                             result.setMasterAddr(masterAddr);
                         }
+
                     }
                 }
             } finally {
+                // 释放写锁
                 this.lock.writeLock().unlock();
             }
         } catch (Exception e) {
             log.error("registerBroker Exception", e);
         }
 
+        // 返回结果..
         return result;
     }
 
@@ -426,7 +461,7 @@ public class RouteInfoManager {
         return null;
     }
 
-    public void scanNotActiveBroker() {
+    public void  scanNotActiveBroker() {
         Iterator<Entry<String, BrokerLiveInfo>> it = this.brokerLiveTable.entrySet().iterator();
         while (it.hasNext()) {
             Entry<String, BrokerLiveInfo> next = it.next();
@@ -435,11 +470,16 @@ public class RouteInfoManager {
                 RemotingUtil.closeChannel(next.getValue().getChannel());
                 it.remove();
                 log.warn("The broker channel expired, {} {}ms", next.getKey(), BROKER_CHANNEL_EXPIRED_TIME);
+                // 参数1：brokerAddr
+                // 参数2：服务器与broker物理节点的ch
                 this.onChannelDestroy(next.getKey(), next.getValue().getChannel());
             }
         }
     }
 
+
+    // 参数1：brokerAddr
+    // 参数2：服务器与broker物理节点的ch
     public void onChannelDestroy(String remoteAddr, Channel channel) {
         String brokerAddrFound = null;
         if (channel != null) {

@@ -317,6 +317,13 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         }
     }
 
+
+    /**
+     * 注册业务处理器
+     * @param requestCode 业务代码
+     * @param processor 业务处理器
+     * @param executor 线程池，如果指定了线程池，业务处理器 处理事件 时使用该线程池资源。
+     */
     @Override
     public void registerProcessor(int requestCode, NettyRequestProcessor processor, ExecutorService executor) {
         ExecutorService executorThis = executor;
@@ -324,10 +331,17 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             executorThis = this.publicExecutor;
         }
 
+        // Pair 对。 第一个参数 处理器  第二个参数 线程池
         Pair<NettyRequestProcessor, ExecutorService> pair = new Pair<NettyRequestProcessor, ExecutorService>(processor, executorThis);
+        // key:  业务代码  value: pair
         this.processorTable.put(requestCode, pair);
     }
 
+    /**
+     * 注册缺省处理器入口
+     * @param processor
+     * @param executor
+     */
     @Override
     public void registerDefaultProcessor(NettyRequestProcessor processor, ExecutorService executor) {
         this.defaultRequestProcessor = new Pair<NettyRequestProcessor, ExecutorService>(processor, executor);
@@ -338,23 +352,59 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         return this.port;
     }
 
+    /**
+     * 根据业务代码获取 pair.其实就是获取处理器和线程池资源
+     * @param requestCode
+     * @return
+     */
     @Override
     public Pair<NettyRequestProcessor, ExecutorService> getProcessorPair(int requestCode) {
         return processorTable.get(requestCode);
     }
 
+    /**
+     * 服务器主动向客户端发起请求时，使用该方法.当前方法是 同步调用，什么是同步调用？服务器业务线程需要在这里等待 client 返回 给结果之后 整个调用才完毕。
+     * @param channel 客户端 ch
+     * @param request 网络请求对象 remotingCommand
+     * @param timeoutMillis 超时时长..
+     * @return
+     * @throws InterruptedException
+     * @throws RemotingSendRequestException
+     * @throws RemotingTimeoutException
+     */
     @Override
     public RemotingCommand invokeSync(final Channel channel, final RemotingCommand request, final long timeoutMillis)
         throws InterruptedException, RemotingSendRequestException, RemotingTimeoutException {
         return this.invokeSyncImpl(channel, request, timeoutMillis);
     }
 
+    /**
+     * 服务器主动向客户端发起请求时，使用该方法.当前方法是 异步调用
+     * @param channel 客户端 ch
+     * @param request 网络请求对象 remotingCommand
+     * @param timeoutMillis 超时时长
+     * @param invokeCallback 请求结果回调处理对象
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     @Override
     public void invokeAsync(Channel channel, RemotingCommand request, long timeoutMillis, InvokeCallback invokeCallback)
         throws InterruptedException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
         this.invokeAsyncImpl(channel, request, timeoutMillis, invokeCallback);
     }
 
+    /**
+     * 服务器 主动 向客户端 发起请求时 使用该方法，注意此方法不关注结果。（单向请求）
+     * @param channel 客户端 ch
+     * @param request 网络请求对象 remotingCommand
+     * @param timeoutMillis 超时时长
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     @Override
     public void invokeOneway(Channel channel, RemotingCommand request, long timeoutMillis) throws InterruptedException,
         RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
@@ -368,7 +418,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
 
     @Override
-    public ExecutorService getCallbackExecutor() {
+    public ExecutorService   getCallbackExecutor() {
         return this.publicExecutor;
     }
 
